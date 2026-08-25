@@ -1,40 +1,45 @@
-# Resmi glibc tabanlı BusyBox imajı
-FROM busybox:glibc AS base
-
-# Fish shell ve bağımlılıklarını indirmek için geçici Debian aşaması
+# Paketleri söküp almak için geçici Debian aşaması
 FROM debian:bookworm-slim AS extractor
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fish \
-    &> /dev/null
+    git \
+    curl \
+    nano \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Bağımlılıkların toplanacağı temiz dizin yapısı
-RUN mkdir -p /rootfs/bin /rootfs/lib /rootfs/lib64 /rootfs/usr/share/fish /rootfs/etc
+# Hedef dosya sistemi yapısını hazırla
+RUN mkdir -p /rootfs/bin /rootfs/usr/bin /rootfs/usr/libexec /rootfs/lib /rootfs/lib64 /rootfs/etc/ssl/certs
 
-# Fish binary ve kütüphanelerini kopyala
-RUN cp /usr/bin/fish /rootfs/bin/fish
-RUN cp /lib/x86_64-linux-gnu/libpcre2-8.so.0* /rootfs/lib/ 2>/dev/null || true
-RUN cp /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0* /rootfs/lib/ 2>/dev/null || true
-RUN cp /lib/x86_64-linux-gnu/libncursesw.so.6* /rootfs/lib/ 2>/dev/null || true
-RUN cp /usr/lib/x86_64-linux-gnu/libncursesw.so.6* /rootfs/lib/ 2>/dev/null || true
-RUN cp -r /usr/share/fish /rootfs/usr/share/
+# 1. Binary (Çalıştırılabilir) Dosyaları Kopyala
+RUN cp /usr/bin/git /rootfs/usr/bin/git && \
+    cp /usr/bin/curl /rootfs/usr/bin/curl && \
+    cp /bin/nano /rootfs/bin/nano || cp /usr/bin/nano /rootfs/usr/bin/nano
 
-# Chog Linux için özel Fish karşılama mesajı tanımla
-RUN mkdir -p /rootfs/etc/fish
-RUN echo 'function fish_greeting; echo (set_color purple)"Welcome to Chog Linux! (BusyBox + glibc + Fish)"(set_color normal); end' > /rootfs/etc/fish/config.fish
+# Git alt modülleri ve core araçlarını kopyala
+RUN cp -r /usr/libexec/git-core /rootfs/usr/libexec/
 
-# Terminal ayarları için gerekli base terminfo tanımını al
-RUN mkdir -p /rootfs/lib/terminfo/x
-RUN cp /lib/terminfo/x/xterm-256color /rootfs/lib/terminfo/x/ 2>/dev/null || cp /usr/share/terminfo/x/xterm-256color /rootfs/lib/terminfo/x/
+# 2. İnternet ve SSL Sertifikalarını Kopyala (curl ve git için şart)
+RUN cp -r /etc/ssl/certs/* /rootfs/etc/ssl/certs/
 
-# Nihai Chog Linux imajı
+# 3. Gerekli Paylaşılan Kütüphaneleri (glibc bağımlılıkları) Dinamik Olarak Topla
+RUN for bin in /usr/bin/git /usr/bin/curl /bin/nano /usr/bin/nano; do \
+      if [ -f "$bin" ]; then \
+        ldd "$bin" | grep -o '/lib[^ ]*' | while read -r lib; do \
+          mkdir -p "/rootfs$(dirname "$lib")"; \
+          cp "$lib" "/rootfs$lib" 2>/dev/null || true; \
+        done; \
+      fi; \
+    done
+
+# Nihai Saf Chog Linux İmajı
 FROM busybox:glibc
 
-# Extractor aşamasından gelen Fish bileşenlerini kök dizine entegre et
+# Toplanan tüm git, curl, nano ve kütüphaneleri sisteme enjekte et
 COPY --from=extractor /rootfs/ /
 
-# Çevre değişkenlerini ata
-ENV TERM=xterm-256color
-ENV SHELL=/bin/fish
+# Karşılama mesajı ayarla
+RUN echo 'echo -e "\e[1;35mWelcome to Chog Linux! (BusyBox + glibc + NetTools)\e[0m"' >> /etc/profile
 
-# Varsayılan kabuğu Fish olarak ayarla
-ENTRYPOINT ["/bin/fish"]
+# Varsayılan kabuk olarak kararlı BusyBox sh kullan
+ENV SHELL=/bin/sh
+ENTRYPOINT ["/bin/sh", "-l"]
